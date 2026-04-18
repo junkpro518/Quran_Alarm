@@ -18,8 +18,11 @@ ARABIC_MONTHS = [
 ]
 
 
-def get_today_hijri_string() -> str:
-    today = datetime.date.today()
-    hijri = Gregorian(today.year, today.month, today.day).to_hijri()
+def get_hijri_string(date: datetime.date) -> str:
+    hijri = Gregorian(date.year, date.month, date.day).to_hijri()
     month_name = ARABIC_MONTHS[hijri.month]
     return f"{hijri.day}/{month_name}/{hijri.year}"
+
+
+def get_today_hijri_string() -> str:
+    return get_hijri_string(datetime.date.today())

@@ -3,12 +3,11 @@ from datetime import datetime
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 import pytz
 
 from config import TIMEZONE
-from hijri_utils import get_today_hijri_string
-from notion_service import get_todays_ward
+from hijri_utils import get_hijri_string, get_today_hijri_string
+from notion_service import get_missed_wards, get_todays_ward
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,9 @@ scheduler: AsyncIOScheduler | None = None
 def init_scheduler(bot, chat_id: str) -> AsyncIOScheduler:
     global scheduler
     tz = pytz.timezone(TIMEZONE)
-    scheduler = AsyncIOScheduler(timezone=tz)
+    scheduler = AsyncIOScheduler(timezone=tz, job_defaults={"misfire_grace_time": 60})
+
+    now = datetime.now(tz)
 
     scheduler.add_job(
         daily_reminder_job,
@@ -38,14 +39,46 @@ def init_scheduler(bot, chat_id: str) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # إذا شغّل البوت بعد 12:00 ظهراً، نطلق المهمة فوراً
+    if now.hour >= 12:
+        scheduler.add_job(
+            daily_reminder_job,
+            trigger="date",
+            run_date=now,
+            args=[bot, chat_id],
+            id="daily_reminder_startup",
+            replace_existing=True,
+        )
+        logger.info("Startup after 12:00 — triggering daily reminder immediately.")
+
     scheduler.start()
     logger.info("Scheduler started. Daily reminder job set for 12:00 %s.", TIMEZONE)
     return scheduler
 
 
 async def daily_reminder_job(bot, chat_id: str) -> None:
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     global scheduler
 
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+
+    # ── فحص الأوراد السابقة غير المكتملة ────────────────────────
+    hijri_today = get_today_hijri_string()
+    missed = get_missed_wards(hijri_today)
+
+    for entry in missed:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(text="✅ تم", callback_data=f"done_{entry['page_id']}")
+        ]])
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ ورد متأخر: صفحات {entry['ward']} ({entry['hijri_date']})\n\nاضغط ✅ تم إذا أكملته.",
+            reply_markup=keyboard,
+        )
+        logger.info("Sent missed reminder for ward '%s' (%s).", entry['ward'], entry['hijri_date'])
+
+    # ── ورد اليوم ─────────────────────────────────────────────────
     hijri_str = get_today_hijri_string()
     ward_data = get_todays_ward(hijri_str)
 
@@ -57,10 +90,7 @@ async def daily_reminder_job(bot, chat_id: str) -> None:
         logger.info("Ward for today (%s) is already done. Skipping reminder.", hijri_str)
         return
 
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
     today_gregorian_str = now.strftime("%Y-%m-%d")
-
     ward_str = ward_data["ward"]
     page_id = ward_data["page_id"]
 
@@ -76,7 +106,7 @@ async def daily_reminder_job(bot, chat_id: str) -> None:
 
     scheduler.add_job(
         send_reminder,
-        trigger=IntervalTrigger(minutes=30, start_date=now, end_date=end_date, timezone=tz),
+        trigger=CronTrigger(hour="12-23", minute="0,30", timezone=tz),
         args=[bot, chat_id, ward_str, today_gregorian_str],
         id=job_id,
         replace_existing=True,
@@ -93,12 +123,30 @@ async def daily_reminder_job(bot, chat_id: str) -> None:
 async def send_reminder(bot, chat_id: str, ward: str, date_key: str) -> None:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+    # ── الأوراد المتأخرة ─────────────────────────────────────────
+    hijri_today = get_today_hijri_string()
+    missed = get_missed_wards(hijri_today)
+
+    for entry in missed:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(text="✅ تم", callback_data=f"done_{entry['page_id']}")
+        ]])
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ ورد متأخر: صفحات {entry['ward']} ({entry['hijri_date']})\n\nاضغط ✅ تم إذا أكملته.",
+            reply_markup=keyboard,
+        )
+        logger.info("Sent missed reminder for ward '%s' (%s).", entry['ward'], entry['hijri_date'])
+
+    # ── ورد اليوم ────────────────────────────────────────────────
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(text="✅ تم", callback_data=f"done_{date_key}")]]
     )
-    text = f"📖 ورد اليوم: صفحات {ward}\n\nاضغط ✅ تم بعد الانتهاء من القراءة"
-
-    await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"📖 ورد اليوم: صفحات {ward}\n\nاضغط ✅ تم بعد الانتهاء من القراءة",
+        reply_markup=keyboard,
+    )
     logger.info("Reminder sent for date_key=%s.", date_key)
 
 

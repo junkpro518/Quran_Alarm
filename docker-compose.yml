@@ -1,0 +1,12 @@
+services:
+  quran-alarm:
+    build: .
+    container_name: quran-alarm
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - quran-alarm_internal
+
+networks:
+  quran-alarm_internal:
+    driver: bridge

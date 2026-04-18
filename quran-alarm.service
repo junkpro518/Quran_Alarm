@@ -1,0 +1,25 @@
+# Installation:
+# 1. Copy this file to /etc/systemd/system/quran-alarm.service
+# 2. Copy project to /opt/quran-alarm/
+# 3. Create venv: python3 -m venv /opt/quran-alarm/venv
+# 4. Install deps: /opt/quran-alarm/venv/bin/pip install -r requirements.txt
+# 5. Copy .env.example to /opt/quran-alarm/.env and fill in values
+# 6. sudo systemctl daemon-reload
+# 7. sudo systemctl enable quran-alarm
+# 8. sudo systemctl start quran-alarm
+
+[Unit]
+Description=Quran Alarm Telegram Bot
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/quran-alarm
+ExecStart=/opt/quran-alarm/venv/bin/python bot.py
+EnvironmentFile=/opt/quran-alarm/.env
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

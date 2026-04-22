@@ -4,9 +4,15 @@ services:
     container_name: quran-alarm
     restart: unless-stopped
     env_file: .env
+    stop_grace_period: 30s
+    expose:
+      - "8080"
     networks:
       - quran-alarm_internal
+      - proxy
 
 networks:
   quran-alarm_internal:
     driver: bridge
+  proxy:
+    external: true

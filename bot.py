@@ -4,6 +4,9 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from scheduler import init_scheduler, cancel_todays_reminders, daily_states
+import health_server
+from error_notifier import notify_owner
+from rate_limit import rate_limited
 import datetime
 from hijri_utils import get_hijri_string, get_today_hijri_string
 from notion_service import get_all_wards, get_todays_ward, mark_ward_done
@@ -11,6 +14,7 @@ from notion_service import get_all_wards, get_todays_ward, mark_ward_done
 logger = logging.getLogger(__name__)
 
 
+@rate_limited
 async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     callback_data = query.data
@@ -48,6 +52,7 @@ async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+@rate_limited
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     today = datetime.date.today()
     wards = get_all_wards()
@@ -81,6 +86,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+@rate_limited
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🕌 بوت الختمة السنوية يعمل!\n\n"
@@ -93,16 +99,32 @@ async def post_init(application: Application) -> None:
     logger.info("post_init: scheduler initialised.")
 
 
+async def post_shutdown(application: Application) -> None:
+    """Graceful shutdown: stop the APScheduler cleanly so in-flight jobs finish."""
+    import scheduler as scheduler_mod
+    sched = scheduler_mod.scheduler
+    if sched and sched.running:
+        try:
+            sched.shutdown(wait=True)
+            logger.info("post_shutdown: scheduler stopped cleanly.")
+        except Exception as e:
+            logger.error("post_shutdown: scheduler shutdown error: %s", e)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # Start health-check HTTP server on background thread (for Uptime Kuma)
+    health_server.start(port=8080)
+
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
 
@@ -115,6 +137,8 @@ def main() -> None:
     application.add_handler(
         CommandHandler("check", check_command)
     )
+
+    application.add_error_handler(notify_owner)
 
     application.run_polling()
 
